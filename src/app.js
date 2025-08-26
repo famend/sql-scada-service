@@ -13,7 +13,7 @@ app.use(utc6Middleware);
 
 // 👉 Servir carpeta "public" como estática
 // Cualquier archivo dentro de /public será accesible en /static/
-app.use('/static', express.static(path.join(__dirname, '../public')));
+app.use('/static', express.static(path.join(__dirname, 'public')));
 
 const UTC_MINUS_6_MS = 6 * 60 * 60 * 1000;
 const QUINCE_MINUTOS_MS = 15 * 60 * 1000;
