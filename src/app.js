@@ -13,11 +13,11 @@ app.use(utc6Middleware);
 
 // 👉 Servir carpeta "public" como estática
 // Cualquier archivo dentro de /public será accesible en /static/
-//app.use('/static', express.static(path.join(__dirname, '../public')));
+app.use('/static', express.static(path.join(__dirname, '../public')));
 // Proporciona la ruta absoluta de la carpeta 'public'
 const publicPath = '/home/cogt.admin/sql-scada-service/public';
 
-app.use('/static', express.static(publicPath));
+//app.use('/static', express.static(publicPath));
 
 const UTC_MINUS_6_MS = 6 * 60 * 60 * 1000;
 const QUINCE_MINUTOS_MS = 15 * 60 * 1000;
