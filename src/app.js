@@ -13,9 +13,9 @@ app.use(utc6Middleware);
 
 // 👉 Servir carpeta "public" como estática
 // Cualquier archivo dentro de /public será accesible en /static/
-app.use('/static', express.static(path.join(__dirname, '../public')));
+app.use('/static', express.static(path.join(__dirname, '../public/')));
 
-console.log("Sirviendo estáticos desde:", path.join(__dirname, '../public'));
+console.log("Sirviendo estáticos desde:", path.join(__dirname, '../public/'));
 
 
 // Proporciona la ruta absoluta de la carpeta 'public'
