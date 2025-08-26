@@ -3,7 +3,7 @@ module.exports = {
     {
       name: "sql-scada-service",
       script: "./src/app.js",
-      cwd: "/home/cogt.admin/sql-scada-service",
+      cwd: "./",
       env: {
         NODE_ENV: "development",
         SQL_USER: "grafana",
