@@ -117,7 +117,7 @@ async function syncDataToRedis() {
 
     const startInsert = Date.now();
     for (const [index, chunk] of chunks.entries()) {
-      await redisClient.zadd('View_Datalog_Gen', chunk);
+      await redisClient.zAdd('View_Datalog_Gen', chunk);
       console.log(`Chunk ${index + 1} de ${chunks.length} insertado`);
     }
     const endInsert = Date.now();
