@@ -241,7 +241,7 @@ app.get('/api/scada-service/redis', async (req, res) => {
   }
   try {
     //const raw = await redisClient.zrangebyscore(vista, desde, hasta);
-    const raw = await redisClient.zrangebyscore(vista, desde, hasta);
+    const raw = await redisClient.zRangeByScore(vista, desde, hasta);
     const parsed = raw.map(JSON.parse);
 
     // Mapear los datos para quitar la 'Z' del timestamp
@@ -362,7 +362,7 @@ app.get('/api/plantas/suma-15min', async (req, res) => {
       toTimestamp = toUTCMinus6(toParam);
     } else {
       // Si no mandan from/to, calcular últimos 15 min desde el último registro
-      const ultimoRegistroRaw = await redisClient.zrange('View_Datalog_Gen', -1, -1);
+      const ultimoRegistroRaw = await redisClient.zRange('View_Datalog_Gen', -1, -1);
       if (!ultimoRegistroRaw || ultimoRegistroRaw.length === 0) {
         return res.json({
           sumas: {
@@ -382,7 +382,7 @@ app.get('/api/plantas/suma-15min', async (req, res) => {
     }
 
     // 2. Obtener registros del ZSET dentro del rango
-    const registrosRaw = await redisClient.zrangebyscore(
+    const registrosRaw = await redisClient.zRangeByScore(
       'View_Datalog_Gen',
       fromTimestamp,
       toTimestamp
@@ -479,7 +479,7 @@ app.get('/api/plantas/suma-15min2', async (req, res) => {
 
     // 1. Determinar el rango de tiempo
     if (!fromParam && !toParam) {
-      const ultimoRegistroRaw = await redisClient.zrange('View_Datalog_Gen', -1, -1);
+      const ultimoRegistroRaw = await redisClient.zRange('View_Datalog_Gen', -1, -1);
       if (!ultimoRegistroRaw || ultimoRegistroRaw.length === 0) {
         return res.json({
           sumas: {
@@ -498,7 +498,7 @@ app.get('/api/plantas/suma-15min2', async (req, res) => {
     }
 
     // 2. Obtener registros del ZSET dentro del rango
-    const registrosRaw = await redisClientrangebyscore(
+    const registrosRaw = await redisClient.zRangeByScore(
       'View_Datalog_Gen',
       fromTimestamp,
       toTimestamp
@@ -577,7 +577,7 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
     
     // 1. Determinar el rango de tiempo
     if (!fromParam && !toParam) {
-      const ultimoRegistroRaw = await redisClient.zrange('View_Datalog_Gen', -1, -1);
+      const ultimoRegistroRaw = await redisClient.zRange('View_Datalog_Gen', -1, -1);
       if (!ultimoRegistroRaw || ultimoRegistroRaw.length === 0) {
         return res.json({
           resultados: [],
@@ -589,7 +589,7 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
       toParam = horaUltimoMs;
       fromParam = toParam;
     }
-    const registrosRaw = await redisClient.zrangebyscore('View_Datalog_Gen', fromParam, toParam);
+    const registrosRaw = await redisClient.zRangeByScore('View_Datalog_Gen', fromParam, toParam);
     const registros = registrosRaw.map(r => {
       try { return JSON.parse(r); } catch { return null; }
     }).filter(r => r);
@@ -676,7 +676,7 @@ app.get('/api/scada-service/suma-agrupada', async (req, res) => {
       fromTimestamp = parseInt(fromParam);
       toTimestamp = parseInt(toParam);
     } else {
-      const ultimoRegistroRaw = await redisClient.zrange('View_Datalog_Gen', -1, -1);
+      const ultimoRegistroRaw = await redisClient.zRange('View_Datalog_Gen', -1, -1);
       if (!ultimoRegistroRaw || ultimoRegistroRaw.length === 0) {
         return res.json({
           sumas: { 
@@ -696,7 +696,7 @@ app.get('/api/scada-service/suma-agrupada', async (req, res) => {
     }
 
     // 2. Obtener registros de Redis dentro del rango de tiempo
-    const registrosRaw = await redisClient.zrangebyscore(
+    const registrosRaw = await redisClient.zRangeByScore(
       'View_Datalog_Gen',
       fromTimestamp,
       toTimestamp
@@ -808,14 +808,14 @@ app.get('/api/plantas/serie-times2', async (req, res) => {
       fromTimestamp = parseInt(fromParam);
       toTimestamp = parseInt(toParam);
     } else {
-      const ultimoRegistroRaw = await redisClient.zrange('View_Datalog_Gen', -1, -1);
+      const ultimoRegistroRaw = await redisClient.zRange('View_Datalog_Gen', -1, -1);
       if (!ultimoRegistroRaw || ultimoRegistroRaw.length === 0) return res.json([]);
       const ultimoRegistro = JSON.parse(ultimoRegistroRaw[0]);
       toTimestamp = new Date(ultimoRegistro.TimestampUTC).getTime();
       fromTimestamp = toTimestamp - QUINCE_MINUTOS_MS;
     }
 
-    const registrosRaw = await redisClient.zrangebyscore('View_Datalog_Gen', fromTimestamp, toTimestamp);
+    const registrosRaw = await redisClient.zRangeByScore('View_Datalog_Gen', fromTimestamp, toTimestamp);
     
     // --- Agrupación
     const groupedData = new Map();
@@ -904,14 +904,14 @@ app.get('/api/plantas/serie-times', async (req, res) => {
       fromTimestamp = Math.floor((parseInt(fromParam)) / QUINCE_MINUTOS_MS) * QUINCE_MINUTOS_MS;
       toTimestamp = Math.floor((parseInt(toParam)) / QUINCE_MINUTOS_MS) * QUINCE_MINUTOS_MS;
     } else {
-      const ultimoRegistroRaw = await redisClient.zrange('View_Datalog_Gen', -1, -1);
+      const ultimoRegistroRaw = await redisClient.zRange('View_Datalog_Gen', -1, -1);
       if (!ultimoRegistroRaw || ultimoRegistroRaw.length === 0) return res.json([]);
       const ultimoRegistro = JSON.parse(ultimoRegistroRaw[0]);
       toTimestamp = new Date(ultimoRegistro.TimestampUTC).getTime();
       fromTimestamp = toTimestamp - QUINCE_MINUTOS_MS;
     }
 
-    const registrosRaw = await redisClient.zrangebyscore('View_Datalog_Gen', fromTimestamp, toTimestamp);
+    const registrosRaw = await redisClient.zRangeByScore('View_Datalog_Gen', fromTimestamp, toTimestamp);
 
     // --- Agrupación
     const groupedData = new Map();
@@ -993,7 +993,7 @@ app.get('/api/scada-service/totalizar_data', async (req, res) => {
         Hasta: ${new Date(endTimestamp).toISOString()}`);
 
     // Obtener los datos del set ordenado de Redis usando el rango de timestamps
-    const data = await redisClient.zrangebyscore('View_Datalog_Gen', startTimestamp, endTimestamp);
+    const data = await redisClient.zRangeByScore('View_Datalog_Gen', startTimestamp, endTimestamp);
 
     if (data.length === 0) {
       return res.status(200).json({ message: 'No se encontraron datos para el rango especificado.', data: [] });
