@@ -675,22 +675,31 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
     let { fromParam, toParam } = req.dates;
     const groupBy = req.query.groupBy;
 
+    const usarIntervaloFijo = !fromParam && !toParam;
+
     // 1. Determinar rango de tiempo
-    if (!fromParam && !toParam) {
-      const ultimoRegistroRaw = await redisClient.zRange('View_Datalog_Gen', -1, -1);
-      if (!ultimoRegistroRaw || ultimoRegistroRaw.length === 0) {
+    if (usarIntervaloFijo) {
+      const registrosRaw = await redisClient.zRange('View_Datalog_Gen', 0, -1);
+      if (!registrosRaw || registrosRaw.length === 0) {
         return res.json({ resultados: [], aviso: 'No hay registros en Redis' });
       }
-      const ultimoRegistro = JSON.parse(ultimoRegistroRaw[0]);
-      const horaUltimoMs = new Date(ultimoRegistro.TimestampUTC).getTime();
-      toParam = horaUltimoMs;
-      fromParam = toParam;
+      fromParam = null;
+      toParam = null;
+    } else {
+      if (!fromParam || !toParam) {
+        return res.status(400).json({ error: 'Debe enviar ambos fromParam y toParam' });
+      }
     }
 
-    const registrosRaw = await redisClient.zRangeByScore('View_Datalog_Gen', fromParam, toParam);
+    const registrosRaw = usarIntervaloFijo
+      ? await redisClient.zRange('View_Datalog_Gen', 0, -1)
+      : await redisClient.zRangeByScore('View_Datalog_Gen', fromParam, toParam);
+
     const registros = registrosRaw.map(r => {
       try { return JSON.parse(r); } catch { return null; }
     }).filter(r => r);
+
+    console.log(`Registros filtrados: ${registros.length}`);
 
     // 2. Agrupar registros
     const agrupados = new Map();
@@ -703,8 +712,7 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
           totalEnergiaEntregada_kWh: 0,
           totalEnergiaRecibida_kWh: 0,
           capacidadMaximaMW: 0,
-          minTimestamp: null,
-          maxTimestamp: null
+          count: 0
         });
       }
 
@@ -714,36 +722,29 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
 
       if (row.Expr1.includes('Entrega')) {
         grupo.totalEnergiaEntregada_kWh += valor;
+        grupo.count++;
       } else if (row.Expr1.includes('Recibida')) {
         grupo.totalEnergiaRecibida_kWh += valor;
       }
 
-      // Actualizar capacidad máxima
       grupo.capacidadMaximaMW = Math.max(grupo.capacidadMaximaMW, capacidadMax);
-
-      // Registrar timestamps
-      const ts = new Date(row.TimestampUTC).getTime();
-      if (!grupo.minTimestamp || ts < grupo.minTimestamp) grupo.minTimestamp = ts;
-      if (!grupo.maxTimestamp || ts > grupo.maxTimestamp) grupo.maxTimestamp = ts;
     }
 
     // 3. Calcular resultados finales
     const resultado = [];
     for (const [key, valores] of agrupados.entries()) {
-      // Tiempo total en horas
-      const horasTotales = (valores.maxTimestamp - valores.minTimestamp) / 3600000 || 1; // mínimo 1h para evitar división por 0
+
+      // Determinar horas totales
+      const horasTotales = usarIntervaloFijo ? valores.count * 0.25 : (toParam - fromParam) / 3600000 || 1;
 
       // Convertir energías a MWh
-      // const energiaEntregadaMWH = valores.totalEnergiaEntregada_kWh / 1000;
-      // const energiaRecibidaMWH = valores.totalEnergiaRecibida_kWh / 1000;
-
       const energiaEntregadaMWH = valores.totalEnergiaEntregada_kWh;
       const energiaRecibidaMWH = valores.totalEnergiaRecibida_kWh;
 
       // Potencia promedio MW
       const potenciaPromedioMW = energiaEntregadaMWH / horasTotales;
 
-      // Capacidad en MWh
+      // Capacidad promedio en MWh
       const capacidadPromedioMWH = valores.capacidadMaximaMW * horasTotales;
 
       // Porcentaje de operación
@@ -763,16 +764,17 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
     }
 
     res.json({
-      desde: new Date(fromParam).toISOString(),
-      hasta: new Date(toParam).toISOString(),
+      desde: fromParam ? new Date(fromParam).toISOString() : null,
+      hasta: toParam ? new Date(toParam).toISOString() : null,
       resultados: resultado
     });
 
   } catch (error) {
-    console.error('Error en /api/plantas/suma-horas:', error);
+    console.error('Error en /api/plantas/suma-15min3:', error);
     res.status(500).json({ error: 'Error interno' });
   }
 });
+
 
 
 // Nuevo endpoint que suma datos y los agrupa por parámetros de consulta
