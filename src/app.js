@@ -1361,185 +1361,95 @@ app.get('/api/scada-service/proyecciones-diarias', async (req, res) => {
 
 app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
   try {
-    const { planta, anio, mes } = req.query;
-    const fromParam = (req.dates && req.dates.fromParam) || req.query.from;
-    const toParam   = (req.dates && req.dates.toParam)   || req.query.to;
+    const { planta, anio, mes, from, to } = req.query;
 
     if (!planta || !anio || !mes) {
       return res.status(400).json({ error: 'Faltan parámetros: planta, anio, mes' });
     }
 
-    // ---------- 1) RANGO DE FECHAS DEL MES ----------
-    const monthIndex = new Date(`${mes} 1, ${anio}`).getMonth(); // 0-11
-    const diasEnMes = new Date(anio, monthIndex + 1, 0).getDate();
-
-    const defaultFrom = new Date(anio, monthIndex, 1, 0, 0, 0).getTime();
-    const defaultTo   = new Date(anio, monthIndex, diasEnMes, 23, 59, 59).getTime();
-
-    let fromMs, toMs;
-    if (fromParam && toParam) {
-      fromMs = parseInt(fromParam, 10);
-      toMs   = parseInt(toParam, 10);
-    } else {
-      fromMs = defaultFrom;
-      toMs   = defaultTo;
-    }
-
-    // ---------- 2) LEER REDIS, DETECTAR UNIDADES ----------
-    const raw = await redisClient.zRangeByScore('View_Datalog_Gen', fromMs, toMs);
-    const registros = raw.map(r => { try { return JSON.parse(r); } catch { return null; } })
-                         .filter(r => r && r.Expr1 && r.Expr1.includes('Entrega'));
-
-    const unidadesSet = new Set(
-      registros
-        .filter(r => (r.Name || '').toUpperCase().includes(planta.toUpperCase()))
-        .map(r => r.Name)
-    );
-    const unidades = Array.from(unidadesSet).sort();
-
-    // Agrupar entregada por unidad y día
-    const entregadaPorUnidadDia = new Map();
-    for (const u of unidades) entregadaPorUnidadDia.set(u, new Map());
-
-    for (const row of registros) {
-      const name = row.Name;
-      if (!name || !(name.toUpperCase().includes(planta.toUpperCase()))) continue;
-
-      const fecha = new Date(row.TimestampUTC);
-      const diaKey = fecha.toISOString().split('T')[0];
-      const v = Number(row.Values_KWH) || 0; // ya está en MWh
-
-      const mapaDia = entregadaPorUnidadDia.get(name);
-      if (mapaDia) {
-        mapaDia.set(diaKey, (mapaDia.get(diaKey) || 0) + v);
-      }
-    }
-
-    // ---------- 3) PROYECCIONES SQL ----------
     const pool = await getPool();
-    const projQuery = `
-      SELECT planta, proyeccion
-      FROM proyecciones
-      WHERE AnioRegistro = @anio AND mes = @mes
-        AND (planta = @planta OR planta LIKE @plantaLike)
-    `;
-    const projResult = await pool.request()
-      .input('anio', sql.Int, parseInt(anio, 10))
-      .input('mes', sql.VarChar, mes)
-      .input('planta', sql.VarChar, planta)
-      .input('plantaLike', sql.VarChar, `${planta}%`)
-      .query(projQuery);
 
-    if (!projResult.recordset.length) {
+    // 1. Obtener proyección mensual (kWh → MWh)
+    const result = await pool.request()
+      .input('planta', sql.VarChar, planta)
+      .input('anio', sql.Int, anio)
+      .input('mes', sql.VarChar, mes)
+      .query(`
+        SELECT proyeccion 
+        FROM proyecciones
+        WHERE planta = @planta AND AnioRegistro = @anio AND mes = @mes
+      `);
+
+    if (result.recordset.length === 0) {
       return res.status(404).json({ error: 'No se encontró proyección para esos parámetros' });
     }
 
-    const proySQL = projResult.recordset.map(r => ({
-      key: (r.planta || '').trim(),
-      mensual_MWh: (Number(r.proyeccion) / 2) / 1000
-    }));
+    const proyeccionMensual_MWh = result.recordset[0].proyeccion / 1000;
 
-    const unidadesUpper = new Set(unidades.map(u => u.toUpperCase()));
-    const filasUnidad = proySQL.filter(p => unidadesUpper.has(p.key.toUpperCase()));
-    const filaPlanta = proySQL.find(p => p.key.toUpperCase() === planta.toUpperCase());
-    const proyeccionBasePlanta_MWh = filaPlanta ? filaPlanta.mensual_MWh : 0;
+    // 2. Cantidad de días del mes
+    const monthIndex = new Date(`${mes} 1, ${anio}`).getMonth();
+    const diasEnMes = new Date(anio, monthIndex + 1, 0).getDate();
 
-    // ---------- 4) ARMAR PROYECCIÓN POR UNIDAD Y TOTAL PLANTA ----------
-    const proyPorUnidadMensual = new Map();
-    let proyeccionMensualPlanta_MWh = 0;
+    // 3. Normalizar rango de fechas
+    let fromDate = from ? new Date(Number(from)) : new Date(anio, monthIndex, 1);
+    let toDate   = to   ? new Date(Number(to))   : new Date();
 
-    if (filasUnidad.length > 0) {
-      // Caso A: proyección por unidad en SQL
-      for (const u of unidades) {
-        const filaU = filasUnidad.find(f => f.key.toUpperCase() === u.toUpperCase());
-        const val = filaU ? filaU.mensual_MWh : 0;
-        proyPorUnidadMensual.set(u, val);
-        proyeccionMensualPlanta_MWh += val;
-      }
-    } else {
-      // Caso B: solo proyección general → asignar la misma a cada unidad
-      for (const u of unidades) {
-        proyPorUnidadMensual.set(u, proyeccionBasePlanta_MWh);
-      }
-      proyeccionMensualPlanta_MWh = proyeccionBasePlanta_MWh * (unidades.length || 1);
+    // Normalizar a medianoche UTC
+    fromDate = new Date(Date.UTC(fromDate.getUTCFullYear(), fromDate.getUTCMonth(), fromDate.getUTCDate()));
+    toDate   = new Date(Date.UTC(toDate.getUTCFullYear(), toDate.getUTCMonth(), toDate.getUTCDate()));
+
+    // 4. Redis → obtener energía entregada
+    const registrosRaw = await redisClient.zRangeByScore(
+      'View_Datalog_Gen',
+      fromDate.getTime(),
+      toDate.getTime()
+    );
+
+    const registros = registrosRaw.map(r => {
+      try { return JSON.parse(r); } catch { return null; }
+    }).filter(r => r && r.Expr1 && r.Expr1.includes('Entregada'));
+
+    // 5. Agrupar por unidad y día
+    const entregadaPorUnidadDia = {};
+    for (const row of registros) {
+      const unidad = row.Name;
+      const fecha = new Date(row.TimestampUTC).toISOString().split('T')[0]; // YYYY-MM-DD
+
+      if (!entregadaPorUnidadDia[unidad]) entregadaPorUnidadDia[unidad] = {};
+      if (!entregadaPorUnidadDia[unidad][fecha]) entregadaPorUnidadDia[unidad][fecha] = 0;
+
+      entregadaPorUnidadDia[unidad][fecha] += parseFloat(row.Values_KWH) || 0;
     }
 
-    const proyPorUnidadDiaria = new Map();
-    for (const u of unidades) {
-      proyPorUnidadDiaria.set(u, proyPorUnidadMensual.get(u) / diasEnMes);
-    }
+    // 6. Detectar las unidades que pertenecen a esa planta (ej: BIJAGUA → BIJAGUA_U1, BIJAGUA_U2)
+    const unidades = Object.keys(entregadaPorUnidadDia).filter(u => u.toUpperCase().includes(planta.toUpperCase()));
 
-    // ---------- 5) RESULTADOS ----------
-    const unidadesRespuesta = [];
-    let totalEntregada_MWh = 0;
-    const hoy = Date.now();
+    const proyeccionPorUnidad = proyeccionMensual_MWh / unidades.length;
+    const proyeccionDiariaPorUnidad = proyeccionPorUnidad / diasEnMes;
 
-    for (const u of unidades) {
-      const mapaDia = entregadaPorUnidadDia.get(u) || new Map();
-      let totalUnidad = 0;
-      const resultados = [];
+    // 7. Generar salida PLANA
+    const salida = [];
+    for (const unidad of unidades) {
+      for (let d = 1; d <= diasEnMes; d++) {
+        const fecha = new Date(anio, monthIndex, d).toISOString().split('T')[0];
 
-      // 📌 Ajuste: rango dinámico
-      let startDay = 1;
-      let endDay = diasEnMes;
+        // Incluir solo los días en rango
+        const fechaTime = new Date(fecha).getTime();
+        if (fechaTime < fromDate.getTime() || fechaTime > toDate.getTime()) continue;
 
-      if (fromParam && toParam) {
-        const fromDate = new Date(Number(fromMs));
-        const toDate = new Date(Number(toMs));
-
-        // Normalizar a medianoche en UTC
-        const fromDay = new Date(Date.UTC(fromDate.getUTCFullYear(), fromDate.getUTCMonth(), fromDate.getUTCDate()));
-        const toDay   = new Date(Date.UTC(toDate.getUTCFullYear(), toDate.getUTCMonth(), toDate.getUTCDate()));
-
-        startDay = fromDay.getUTCDate();
-        endDay   = toDay.getUTCDate();
-      }
-
-      for (let d = startDay; d <= endDay; d++) {
-        const dt = new Date(Number(anio), monthIndex, d);
-        const claveDia = dt.toISOString().split('T')[0];
-        const ts = dt.getTime();
-
-        let entregada = mapaDia.get(claveDia);
-
-        if (!(fromParam && toParam)) {
-          if (ts > hoy) {
-            entregada = null; // futuro
-          } else {
-            entregada = entregada != null ? entregada : 0; // pasado sin datos
-          }
-        }
-
-        resultados.push({
-          fecha: claveDia,
-          energiaProyectada_MWh: Number((proyPorUnidadDiaria.get(u) || 0).toFixed(2)),
-          energiaEntregada_MWh: entregada != null ? Number(entregada.toFixed(2)) : null
+        salida.push({
+          planta,
+          unidad,
+          fecha,
+          energiaProyectada_MWh: +proyeccionDiariaPorUnidad.toFixed(2),
+          energiaEntregada_MWh: entregadaPorUnidadDia[unidad]?.[fecha]
+            ? +entregadaPorUnidadDia[unidad][fecha].toFixed(2)
+            : null
         });
-
-        if (entregada != null) totalUnidad += entregada;
       }
-
-      totalEntregada_MWh += totalUnidad;
-
-      unidadesRespuesta.push({
-        unidad: u,
-        proyeccionMensual_MWh: Number((proyPorUnidadMensual.get(u) || 0).toFixed(2)),
-        totalEntregada_MWh: Number(totalUnidad.toFixed(2)),
-        resultados
-      });
     }
 
-    // ---------- 6) RESPUESTA ----------
-    res.json({
-      planta,
-      anio: Number(anio),
-      mes,
-      dias: diasEnMes,
-      periodo: { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() },
-      proyeccionMensual_MWh: Number(proyeccionMensualPlanta_MWh.toFixed(2)),
-      totalEntregada_MWh: Number(totalEntregada_MWh.toFixed(2)),
-      unidades: unidadesRespuesta
-    });
+    res.json(salida);
 
   } catch (err) {
     console.error('❌ Error en /api/scada-service/proyecciones-diarias2:', err);
