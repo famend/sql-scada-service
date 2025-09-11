@@ -677,100 +677,87 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
 
     const usarIntervaloFijo = !fromParam && !toParam;
 
-    // 1. Determinar rango de tiempo
-    if (usarIntervaloFijo) {
-      const ultimoRegistroRaw = await redisClient.zRange('View_Datalog_Gen', -1, -1);
-      if (!ultimoRegistroRaw || ultimoRegistroRaw.length === 0) {
-        return res.json({ resultados: [], aviso: 'No hay registros en Redis' });
-      }
-      const ultimoRegistro = JSON.parse(ultimoRegistroRaw[0]);
-      const horaUltimoMs = new Date(ultimoRegistro.TimestampUTC).getTime();
-      toParam = horaUltimoMs;
-      fromParam = toParam;
-    }
+    const registrosRaw = usarIntervaloFijo
+      ? await redisClient.zRange('View_Datalog_Gen', 0, -1)
+      : await redisClient.zRangeByScore('View_Datalog_Gen', fromParam, toParam);
 
-    const registrosRaw = await redisClient.zRangeByScore('View_Datalog_Gen', fromParam, toParam);
-    const registros = registrosRaw.map(r => {
-      try { return JSON.parse(r); } catch { return null; }
-    }).filter(r => r);
+    const registros = registrosRaw
+      .map(r => { try { return JSON.parse(r); } catch { return null; } })
+      .filter(r => r);
 
-    // 2. Agrupar registros
+    if (!registros.length) return res.json({ resultados: [], aviso: 'No hay registros' });
+
     const agrupados = new Map();
 
     for (const row of registros) {
       const key = groupBy ? row[groupBy] : 'totalPlantas';
-
       if (!agrupados.has(key)) {
         agrupados.set(key, {
-          totalEnergiaEntregada_kWh: 0,
-          totalEnergiaRecibida_kWh: 0,
-          capacidadMaximaMW: 0,
-          minTimestamp: null,
-          maxTimestamp: null
+          potenciaMWArray: [],
+          energiaRecibidaMWH: 0,
+          capacidadMaximaMW: 0
         });
       }
 
       const grupo = agrupados.get(key);
-      const valor = parseFloat(row.Values_KWH) || 0;
+      const energiaMWH = parseFloat(row.Values_KWH) || 0; // Ya está en MWh
       const capacidadMax = parseFloat(row.Maximo_Cogeneracion_MW) || 0;
 
       if (row.Expr1.includes('Entrega')) {
-        grupo.totalEnergiaEntregada_kWh += valor;
+        if (usarIntervaloFijo) {
+          const potenciaMW = energiaMWH / 0.25;
+          grupo.potenciaMWArray.push(potenciaMW);
+        } else {
+          grupo.potenciaMWArray.push(energiaMWH); // se dividirá entre horas reales luego
+        }
       } else if (row.Expr1.includes('Recibida')) {
-        grupo.totalEnergiaRecibida_kWh += valor;
+        grupo.energiaRecibidaMWH += energiaMWH;
       }
 
-      // Actualizar capacidad máxima
       grupo.capacidadMaximaMW = Math.max(grupo.capacidadMaximaMW, capacidadMax);
-
-      // Registrar timestamps
-      const ts = new Date(row.TimestampUTC).getTime();
-      if (!grupo.minTimestamp || ts < grupo.minTimestamp) grupo.minTimestamp = ts;
-      if (!grupo.maxTimestamp || ts > grupo.maxTimestamp) grupo.maxTimestamp = ts;
     }
 
-    // 3. Calcular resultados finales
     const resultado = [];
-    for (const [key, valores] of agrupados.entries()) {
-      // Tiempo total en horas
-            const horasTotales = usarIntervaloFijo ? valores.count * 0.25 : (toParam - fromParam) / 3600000 || 1;
 
-     // const horasTotales = (valores.maxTimestamp - valores.minTimestamp) / 3600000 || 1; // mínimo 1h para evitar división por 0
+    for (const [key, grupo] of agrupados.entries()) {
+      let potenciaPromedioMW = 0;
+      let horasTotales = 1;
 
-      // Convertir energías a MWh
-      const energiaEntregadaMWH = valores.totalEnergiaEntregada_kWh;
-      const energiaRecibidaMWH = valores.totalEnergiaRecibida_kWh;
+      if (usarIntervaloFijo) {
+        potenciaPromedioMW = grupo.potenciaMWArray.reduce((a, b) => a + b, 0) / grupo.potenciaMWArray.length;
+        horasTotales = grupo.potenciaMWArray.length * 0.25;
+      } else {
+        const energiaTotalMWH = grupo.potenciaMWArray.reduce((a, b) => a + b, 0);
+        horasTotales = (toParam - fromParam) / 3600000 || 1;
+        potenciaPromedioMW = energiaTotalMWH / horasTotales;
+      }
 
-      // Potencia promedio MW
-      const potenciaPromedioMW = energiaEntregadaMWH / horasTotales;
-
-      // Capacidad en MWh
-      const capacidadPromedioMWH = valores.capacidadMaximaMW * horasTotales;
-
-      // Porcentaje de operación
-      const porcentajeOperacion = valores.capacidadMaximaMW > 0
-        ? (potenciaPromedioMW / valores.capacidadMaximaMW) * 100
+      const capacidadPromedioMWH = grupo.capacidadMaximaMW * horasTotales;
+      const porcentajeOperacion = grupo.capacidadMaximaMW > 0
+        ? (potenciaPromedioMW / grupo.capacidadMaximaMW) * 100
         : 0;
 
       resultado.push({
         group: key,
-        energiaEntregada_MWH: energiaEntregadaMWH,
-        energiaRecibida_MWH: energiaRecibidaMWH,
-        capacidadGeneracion_MW: valores.capacidadMaximaMW,
+        energiaEntregada_MWH: usarIntervaloFijo
+          ? grupo.potenciaMWArray.reduce((a, b) => a + b * 0.25, 0)
+          : grupo.potenciaMWArray.reduce((a, b) => a + b, 0),
+        energiaRecibida_MWH: grupo.energiaRecibidaMWH,
+        capacidadGeneracion_MW: grupo.capacidadMaximaMW,
         capacidadGeneracion_MWH: capacidadPromedioMWH,
         potenciaOperacion_MW: potenciaPromedioMW,
-        porcentajeOperacion: porcentajeOperacion
+        porcentajeOperacion
       });
     }
 
     res.json({
-      desde: new Date(fromParam).toISOString(),
-      hasta: new Date(toParam).toISOString(),
+      desde: fromParam ? new Date(fromParam).toISOString() : null,
+      hasta: toParam ? new Date(toParam).toISOString() : null,
       resultados: resultado
     });
 
   } catch (error) {
-    console.error('Error en /api/plantas/suma-horas:', error);
+    console.error('Error en /api/plantas/suma-corregida:', error);
     res.status(500).json({ error: 'Error interno' });
   }
 });
