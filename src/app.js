@@ -675,8 +675,10 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
     let { fromParam, toParam } = req.dates;
     const groupBy = req.query.groupBy;
 
+    const usarIntervaloFijo = !fromParam && !toParam;
+
     // 1. Determinar rango de tiempo
-    if (!fromParam && !toParam) {
+    if (usarIntervaloFijo) {
       const ultimoRegistroRaw = await redisClient.zRange('View_Datalog_Gen', -1, -1);
       if (!ultimoRegistroRaw || ultimoRegistroRaw.length === 0) {
         return res.json({ resultados: [], aviso: 'No hay registros en Redis' });
@@ -731,12 +733,11 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
     const resultado = [];
     for (const [key, valores] of agrupados.entries()) {
       // Tiempo total en horas
-      const horasTotales = (valores.maxTimestamp - valores.minTimestamp) / 3600000 || 1; // mínimo 1h para evitar división por 0
+            const horasTotales = usarIntervaloFijo ? valores.count * 0.25 : (toParam - fromParam) / 3600000 || 1;
+
+     // const horasTotales = (valores.maxTimestamp - valores.minTimestamp) / 3600000 || 1; // mínimo 1h para evitar división por 0
 
       // Convertir energías a MWh
-      // const energiaEntregadaMWH = valores.totalEnergiaEntregada_kWh / 1000;
-      // const energiaRecibidaMWH = valores.totalEnergiaRecibida_kWh / 1000;
-
       const energiaEntregadaMWH = valores.totalEnergiaEntregada_kWh;
       const energiaRecibidaMWH = valores.totalEnergiaRecibida_kWh;
 
