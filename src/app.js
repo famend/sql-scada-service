@@ -1340,7 +1340,7 @@ app.get('/api/scada-service/proyecciones-diarias', async (req, res) => {
       resultados.push({
         fecha: claveDia,
         energiaProyectada_kWh: proyeccionDiaria,
-        energiaEntregada_MWh: entregadaPorDia[claveDia] ? (entregadaPorDia[claveDia] / 1000).toFixed(2) : null
+        energiaEntregada_MWh: entregadaPorDia[claveDia] ? (entregadaPorDia[claveDia]).toFixed(2) : null
       });
     }
 
