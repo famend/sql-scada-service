@@ -1297,7 +1297,7 @@ app.get('/api/scada-service/proyecciones-diarias', async (req, res) => {
       return res.status(404).json({ error: 'No se encontró proyección para esos parámetros' });
     }
 
-    const proyeccionMensual = result.recordset[0].proyeccion;
+    const proyeccionMensual = result.recordset[0].proyeccion / 1000;
 
     // 2. Calcular cantidad de días del mes
     const monthIndex = new Date(`${mes} 1, ${anio}`).getMonth(); // convertir texto a número de mes
