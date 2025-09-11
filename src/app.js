@@ -693,7 +693,7 @@ app.get('/api/plantas/suma-15min4', async (req, res) => {
   }
 });
 
-app.get('/api/plantas/suma-15min3', async (req, res) => {
+app.get('/api/plantas/suma-15min4', async (req, res) => {
   try {
     let { fromParam, toParam } = req.dates;
     const groupBy = req.query.groupBy;
@@ -733,7 +733,7 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
         agrupados.set(key, {
           totalEnergiaEntregada: 0,
           totalEnergiaRecibida: 0,
-          totalCapacidadMW: 0,
+          capacidadMW: 0,   // capacidad de la planta, no acumulada
           count: 0
         });
       }
@@ -744,7 +744,7 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
 
       if (row.Expr1.includes('Entrega')) {
         grupo.totalEnergiaEntregada += valor;
-        grupo.totalCapacidadMW += capacidadMaximaMW;
+        grupo.capacidadMW = Math.max(grupo.capacidadMW, capacidadMaximaMW); // usar el mayor valor
         grupo.count++;
       } else if (row.Expr1.includes('Recibida')) {
         grupo.totalEnergiaRecibida += valor;
@@ -758,24 +758,19 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
         ? valores.count * 0.25
         : (toParam - fromParam) / 3600000 || 1;
 
-      // potencia promedio MW = Energía entregada / horas totales
-      const potenciaPromedio = valores.totalEnergiaEntregada / horasTotales;
-
-      // capacidad promedio en MWh = Capacidad MW * horas totales
-      const capacidadPromedioMWH = valores.totalCapacidadMW * horasTotales;
-
-      // porcentaje operación
-      const porcOperacion = valores.totalCapacidadMW > 0
-        ? (potenciaPromedio / valores.totalCapacidadMW) * 100
+      const potenciaPromedioMW = valores.totalEnergiaEntregada / horasTotales;
+      const capacidadPromedioMWH = valores.capacidadMW * horasTotales;
+      const porcOperacion = valores.capacidadMW > 0
+        ? (potenciaPromedioMW / valores.capacidadMW) * 100
         : 0;
 
       resultado.push({
         group: key,
         energiaEntregada_MWH: valores.totalEnergiaEntregada,
         energiaRecibida_MWH: valores.totalEnergiaRecibida,
-        capacidadGeneracion_MW: valores.totalCapacidadMW,
+        capacidadGeneracion_MW: valores.capacidadMW,        // ya no sumado
         capacidadGeneracion_MWH: capacidadPromedioMWH,
-        potenciaOperacion_MW: potenciaPromedio,
+        potenciaOperacion_MW: potenciaPromedioMW,
         porcentajeOperacion: porcOperacion
       });
     }
@@ -791,6 +786,7 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
     res.status(500).json({ error: 'Error interno' });
   }
 });
+
 
 
 app.get('/api/plantas/suma-15min31', async (req, res) => {
