@@ -1273,6 +1273,93 @@ app.get('/api/scada-service/totalizar_data', async (req, res) => {
   }
 });
 
+app.get('/api/scada-service/proyecciones-diarias', async (req, res) => {
+  try {
+    const { planta, anio, mes } = req.query;
+
+    if (!planta || !anio || !mes) {
+      return res.status(400).json({ error: 'Faltan parámetros: planta, anio, mes' });
+    }
+
+    // 1. Obtener proyección mensual desde SQL Server
+    const pool = await getPool();
+    const result = await pool.request()
+      .input('planta', sql.VarChar, planta)
+      .input('anio', sql.Int, anio)
+      .input('mes', sql.VarChar, mes)
+      .query(`
+        SELECT proyeccion 
+        FROM proyecciones
+        WHERE planta = @planta AND AnioRegistro = @anio AND mes = @mes
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ error: 'No se encontró proyección para esos parámetros' });
+    }
+
+    const proyeccionMensual = result.recordset[0].proyeccion;
+
+    // 2. Calcular cantidad de días del mes
+    const monthIndex = new Date(`${mes} 1, ${anio}`).getMonth(); // convertir texto a número de mes
+    const diasEnMes = new Date(anio, monthIndex + 1, 0).getDate();
+
+    // 3. Proyección diaria (kWh)
+    const proyeccionDiaria = proyeccionMensual / diasEnMes;
+
+    // 4. Intervalo de tiempo del mes
+    const inicioMes = new Date(anio, monthIndex, 1, 0, 0, 0).getTime();
+    const finMes = new Date(anio, monthIndex, diasEnMes, 23, 59, 59).getTime();
+
+    // 5. Obtener datos reales de Redis
+    const registrosRaw = await redisClient.zRangeByScore(
+      'View_Datalog_Gen',
+      inicioMes,
+      finMes
+    );
+
+    const registros = registrosRaw.map(r => {
+      try { return JSON.parse(r); } catch { return null; }
+    }).filter(r => r);
+
+    // 6. Agrupar energía entregada por día
+    const entregadaPorDia = {};
+    for (const row of registros) {
+      if (row.Expr1 && row.Expr1.includes('Entrega')) {
+        const fecha = new Date(row.TimestampUTC);
+        const claveDia = fecha.toISOString().split('T')[0]; // YYYY-MM-DD
+        entregadaPorDia[claveDia] = (entregadaPorDia[claveDia] || 0) + (parseFloat(row.Values_KWH) || 0);
+      }
+    }
+
+    // 7. Armar resultado día por día
+    const resultados = [];
+    for (let d = 1; d <= diasEnMes; d++) {
+      const fecha = new Date(anio, monthIndex, d);
+      const claveDia = fecha.toISOString().split('T')[0];
+
+      resultados.push({
+        fecha: claveDia,
+        energiaProyectada_kWh: proyeccionDiaria,
+        energiaEntregada_MWh: entregadaPorDia[claveDia] ? (entregadaPorDia[claveDia] / 1000).toFixed(2) : null
+      });
+    }
+
+    res.json({
+      planta,
+      anio,
+      mes,
+      dias: diasEnMes,
+      proyeccionMensual,
+      resultados
+    });
+
+  } catch (err) {
+    console.error('❌ Error en /api/plantas/proyecciones-diarias:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+
 // --- Inicio del servidor después de conectar Redis ---
 (async () => {
   try {
