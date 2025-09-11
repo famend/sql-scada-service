@@ -582,6 +582,98 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
   try {
     let { fromParam, toParam } = req.dates;
     const groupBy = req.query.groupBy;
+    
+    // 1. Determinar el rango de tiempo
+    if (!fromParam && !toParam) {
+      const ultimoRegistroRaw = await redisClient.zRange('View_Datalog_Gen', -1, -1);
+      if (!ultimoRegistroRaw || ultimoRegistroRaw.length === 0) {
+        return res.json({
+          resultados: [],
+          aviso: 'No hay registros en Redis'
+        });
+      }
+      const ultimoRegistro = JSON.parse(ultimoRegistroRaw[0]);
+      const horaUltimoMs = new Date(ultimoRegistro.TimestampUTC).getTime();
+      toParam = horaUltimoMs;
+      fromParam = toParam;
+    }
+    const registrosRaw = await redisClient.zRangeByScore('View_Datalog_Gen', fromParam, toParam);
+    const registros = registrosRaw.map(r => {
+      try { return JSON.parse(r); } catch { return null; }
+    }).filter(r => r);
+    
+    console.log(`Registros filtrados: ${registros.length}`);
+
+    // 2. Definir estructura para agrupar y acumular
+    const agrupados = new Map();
+    
+    // 3. Procesar registros y acumular valores
+    for (const row of registros) {
+      const key = groupBy ? row[groupBy] : 'totalPlantas';
+      
+      if (!agrupados.has(key)) {
+        agrupados.set(key, {
+          totalEnergiaEntregada: 0,
+          totalEnergiaRecibida: 0,
+          totalPotenciaMW: 0,
+          potenciaPromedioMW:0,
+          totalCapacidadMW: 0, 
+          count: 0
+        });
+      }
+      
+      const grupo = agrupados.get(key);
+      const valor = parseFloat(row.Values_KWH) || 0;
+      const capacidadMaximaMW = parseFloat(row.Maximo_Cogeneracion_MW) || 0;
+      
+      if (row.Expr1.includes('Entrega')) {
+        grupo.totalEnergiaEntregada += valor;
+        const potenciaMW = valor / 0.25;
+        grupo.totalPotenciaMW += potenciaMW;
+        grupo.totalCapacidadMW += capacidadMaximaMW;
+        grupo.count++;
+      } else if (row.Expr1.includes('Recibida')) {
+        grupo.totalEnergiaRecibida += valor;
+      }
+    }
+    
+    // 4. Calcular valores finales y preparar salida
+    const resultado = [];
+    for (const [key, valores] of agrupados.entries()) {
+      //const potenciaPromedio = valores.count > 0 ? valores.totalPotenciaMW / valores.count : 0;
+      //const capacidadMaximaPromedio = valores.count > 0 ? valores.totalCapacidadMW / valores.count : 0; // Promedia la capacidad
+      const potenciaPromedio = valores.totalPotenciaMW;
+      const capacidadMaximaPromedio = valores.totalCapacidadMW;
+      const capacidadPromedioMWH = capacidadMaximaPromedio * 0.25; // Convertir a MWh
+      const porcOperacion = (capacidadMaximaPromedio > 0) ? (potenciaPromedio / capacidadMaximaPromedio) * 100 : 0;
+
+      resultado.push({
+        group: key,
+        'energiaEntregada_MWH': valores.totalEnergiaEntregada,
+        'energiaRecibida_MWH': valores.totalEnergiaRecibida,
+        'capacidadGeneracion_MW': capacidadMaximaPromedio,
+        'capacidadGeneracion_MWH': capacidadPromedioMWH,
+        'potenciaOperacion_MW': potenciaPromedio,
+        'porcentajeOperacion': porcOperacion
+      });
+    }
+    
+    res.json({
+      desde: new Date(fromParam).toISOString(),
+      hasta: new Date(toParam).toISOString(),
+      resultados: resultado
+    });
+    
+  } catch (error) {
+    console.error('Error en /api/plantas/suma-15min:', error);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+app.get('/api/plantas/suma-15min4', async (req, res) => {
+  try {
+    let { fromParam, toParam } = req.dates;
+    const groupBy = req.query.groupBy;
 
     // 1. Determinar rango de tiempo
     if (!fromParam && !toParam) {
@@ -680,6 +772,7 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
     res.status(500).json({ error: 'Error interno' });
   }
 });
+
 
 // Nuevo endpoint que suma datos y los agrupa por parámetros de consulta
 app.get('/api/scada-service/suma-agrupada', async (req, res) => {
