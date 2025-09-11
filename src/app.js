@@ -583,8 +583,10 @@ app.get('/api/plantas/suma-15min4', async (req, res) => {
     let { fromParam, toParam } = req.dates;
     const groupBy = req.query.groupBy;
     
+    const usarIntervaloFijo = !fromParam && !toParam;
+
     // 1. Determinar el rango de tiempo
-    if (!fromParam && !toParam) {
+    if (usarIntervaloFijo) {
       const ultimoRegistroRaw = await redisClient.zRange('View_Datalog_Gen', -1, -1);
       if (!ultimoRegistroRaw || ultimoRegistroRaw.length === 0) {
         return res.json({
@@ -638,23 +640,44 @@ app.get('/api/plantas/suma-15min4', async (req, res) => {
     }
     
     // 4. Calcular valores finales y preparar salida
+    // const resultado = [];
+    // for (const [key, valores] of agrupados.entries()) {
+    //   const potenciaPromedio = valores.totalPotenciaMW;
+    //   const capacidadMaximaPromedio = valores.totalCapacidadMW;
+    //   const capacidadPromedioMWH = capacidadMaximaPromedio * 0.25; // Convertir a MWh
+    //   const porcOperacion = (capacidadMaximaPromedio > 0) ? (potenciaPromedio / capacidadMaximaPromedio) * 100 : 0;
+
+    //   resultado.push({
+    //     group: key,
+    //     'energiaEntregada_MWH': valores.totalEnergiaEntregada,
+    //     'energiaRecibida_MWH': valores.totalEnergiaRecibida,
+    //     'capacidadGeneracion_MW': capacidadMaximaPromedio,
+    //     'capacidadGeneracion_MWH': capacidadPromedioMWH,
+    //     'potenciaOperacion_MW': potenciaPromedio,
+    //     'porcentajeOperacion': porcOperacion
+    //   });
+    // }
+
     const resultado = [];
     for (const [key, valores] of agrupados.entries()) {
-      //const potenciaPromedio = valores.count > 0 ? valores.totalPotenciaMW / valores.count : 0;
-      //const capacidadMaximaPromedio = valores.count > 0 ? valores.totalCapacidadMW / valores.count : 0; // Promedia la capacidad
-      const potenciaPromedio = valores.totalPotenciaMW;
-      const capacidadMaximaPromedio = valores.totalCapacidadMW;
-      const capacidadPromedioMWH = capacidadMaximaPromedio * 0.25; // Convertir a MWh
-      const porcOperacion = (capacidadMaximaPromedio > 0) ? (potenciaPromedio / capacidadMaximaPromedio) * 100 : 0;
+      const horasTotales = usarIntervaloFijo
+        ? valores.count * 0.25
+        : (toParam - fromParam) / 3600000 || 1;
+
+      const potenciaPromedio = valores.totalEnergiaEntregada / horasTotales;
+      const capacidadPromedioMWH = valores.totalCapacidadMW * horasTotales;
+      const porcOperacion = valores.totalCapacidadMW > 0
+        ? (potenciaPromedio / valores.totalCapacidadMW) * 100
+        : 0;
 
       resultado.push({
         group: key,
-        'energiaEntregada_MWH': valores.totalEnergiaEntregada,
-        'energiaRecibida_MWH': valores.totalEnergiaRecibida,
-        'capacidadGeneracion_MW': capacidadMaximaPromedio,
-        'capacidadGeneracion_MWH': capacidadPromedioMWH,
-        'potenciaOperacion_MW': potenciaPromedio,
-        'porcentajeOperacion': porcOperacion
+        energiaEntregada_MWH: valores.totalEnergiaEntregada,
+        energiaRecibida_MWH: valores.totalEnergiaRecibida,
+        capacidadGeneracion_MW: valores.totalCapacidadMW,
+        capacidadGeneracion_MWH: capacidadPromedioMWH,
+        potenciaOperacion_MW: potenciaPromedio,
+        porcentajeOperacion: porcOperacion
       });
     }
     
