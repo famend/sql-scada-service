@@ -1479,7 +1479,18 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
       let totalUnidad = 0;
       const resultados = [];
 
-      for (let d = 1; d <= diasEnMes; d++) {
+      // 📌 Ajuste: rango dinámico
+      let startDay = 1;
+      let endDay = diasEnMes;
+
+      if (fromParam && toParam) {
+        const fromDate = new Date(fromMs);
+        const toDate = new Date(toMs);
+        startDay = fromDate.getDate();
+        endDay = toDate.getDate();
+      }
+
+      for (let d = startDay; d <= endDay; d++) {
         const dt = new Date(Number(anio), monthIndex, d);
         const claveDia = dt.toISOString().split('T')[0];
         const ts = dt.getTime();
@@ -1490,7 +1501,7 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
           if (ts > hoy) {
             entregada = null; // futuro
           } else {
-            entregada = entregada != null ? entregada : 0; // pasado sin datos → 0
+            entregada = entregada != null ? entregada : 0; // pasado sin datos
           }
         }
 
@@ -1530,7 +1541,6 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
     res.status(500).json({ error: 'Error interno' });
   }
 });
-
 
 
 // --- Inicio del servidor después de conectar Redis ---
