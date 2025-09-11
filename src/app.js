@@ -693,7 +693,7 @@ app.get('/api/plantas/suma-15min4', async (req, res) => {
   }
 });
 
-app.get('/api/plantas/suma-15min4', async (req, res) => {
+app.get('/api/plantas/suma-15min3', async (req, res) => {
   try {
     let { fromParam, toParam } = req.dates;
     const groupBy = req.query.groupBy;
