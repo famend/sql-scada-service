@@ -692,8 +692,6 @@ app.get('/api/plantas/suma-15min4', async (req, res) => {
       try { return JSON.parse(r); } catch { return null; }
     }).filter(r => r);
 
-    console.log(`Registros filtrados: ${registros.length}`);
-
     // 2. Agrupar registros
     const agrupados = new Map();
 
@@ -736,8 +734,11 @@ app.get('/api/plantas/suma-15min4', async (req, res) => {
       const horasTotales = (valores.maxTimestamp - valores.minTimestamp) / 3600000 || 1; // mínimo 1h para evitar división por 0
 
       // Convertir energías a MWh
-      const energiaEntregadaMWH = valores.totalEnergiaEntregada_kWh / 1000;
-      const energiaRecibidaMWH = valores.totalEnergiaRecibida_kWh / 1000;
+      // const energiaEntregadaMWH = valores.totalEnergiaEntregada_kWh / 1000;
+      // const energiaRecibidaMWH = valores.totalEnergiaRecibida_kWh / 1000;
+
+      const energiaEntregadaMWH = valores.totalEnergiaEntregada_kWh;
+      const energiaRecibidaMWH = valores.totalEnergiaRecibida_kWh;
 
       // Potencia promedio MW
       const potenciaPromedioMW = energiaEntregadaMWH / horasTotales;
