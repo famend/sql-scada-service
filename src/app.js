@@ -1359,7 +1359,7 @@ app.get('/api/scada-service/proyecciones-diarias', async (req, res) => {
   }
 });
 
-app.get('/api/scada-service/proyecciones-diarias3', async (req, res) => {
+app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
   try {
     const { planta, anio, mes } = req.query;
     const fromParam = (req.dates && req.dates.fromParam) || req.query.from;
@@ -1460,6 +1460,7 @@ app.get('/api/scada-service/proyecciones-diarias3', async (req, res) => {
     res.status(500).json({ error: 'Error interno' });
   }
 });
+
 
 
 // --- Inicio del servidor después de conectar Redis ---
