@@ -1484,10 +1484,15 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
       let endDay = diasEnMes;
 
       if (fromParam && toParam) {
-        const fromDate = new Date(fromMs);
-        const toDate = new Date(toMs);
-        startDay = fromDate.getDate();
-        endDay = toDate.getDate();
+        const fromDate = new Date(Number(fromMs));
+        const toDate = new Date(Number(toMs));
+
+        // Normalizar a medianoche en UTC
+        const fromDay = new Date(Date.UTC(fromDate.getUTCFullYear(), fromDate.getUTCMonth(), fromDate.getUTCDate()));
+        const toDay   = new Date(Date.UTC(toDate.getUTCFullYear(), toDate.getUTCMonth(), toDate.getUTCDate()));
+
+        startDay = fromDay.getUTCDate();
+        endDay   = toDay.getUTCDate();
       }
 
       for (let d = startDay; d <= endDay; d++) {
