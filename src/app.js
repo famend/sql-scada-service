@@ -1359,11 +1359,10 @@ app.get('/api/scada-service/proyecciones-diarias', async (req, res) => {
   }
 });
 
-// GET /api/scada-service/proyecciones-diarias?planta=BIJAGUA&anio=2024&mes=Julio&from=...&to=...
+// GET /api/scada-service/proyecciones-diarias?planta=BIJAGUA&anio=2025&mes=Septiembre&from=...&to=...
 app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
   try {
     const { planta, anio, mes } = req.query;
-    // from/to pueden venir de req.dates (middleware) o del query string
     const fromParam = (req.dates && req.dates.fromParam) || req.query.from;
     const toParam   = (req.dates && req.dates.toParam)   || req.query.to;
 
@@ -1373,8 +1372,6 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
 
     // ---------- 1) PROYECCIÓN SQL SERVER ----------
     const pool = await getPool();
-    // Buscamos proyección al nivel de planta o de unidad (si existiera)
-    // NOTA: En SQL Server, '_' y '%' son wildcards; escapamos '_' con corchetes [] si quieres match literal.
     const projQuery = `
       SELECT planta, proyeccion
       FROM proyecciones
@@ -1391,24 +1388,19 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
       return res.status(404).json({ error: 'No se encontró proyección para esos parámetros' });
     }
 
-    // Normalizamos: mapa proyección mensual por unidad (si existe) o a nivel planta
-    // La conversión que ya usabas: (proyeccion / 2) / 1000 -> MWh
     const proySQL = projResult.recordset.map(r => ({
-      key: r.planta, // puede ser "BIJAGUA" o "BIJAGUA_U1"
+      key: r.planta,
       mensual_MWh: (Number(r.proyeccion) / 2) / 1000
     }));
 
-    // Identificamos si hay filas por unidad (ej: BIJAGUA_U1/BIJAGUA_U2)
     const hayProyPorUnidad = proySQL.some(p => p.key.toUpperCase() !== planta.toUpperCase());
 
-    // Proyección total a nivel planta (sumamos todo lo que empiece por "planta")
     const proyeccionMensualPlanta_MWh = proySQL
       .filter(p => p.key.toUpperCase() === planta.toUpperCase() || p.key.toUpperCase().startsWith(planta.toUpperCase()))
       .reduce((acc, p) => acc + p.mensual_MWh, 0);
 
     // ---------- 2) RANGO DE FECHAS ----------
-    // Si no mandan from/to, usamos todo el mes natural del (anio, mes)
-    const monthIndex = new Date(`${mes} 1, ${anio}`).getMonth(); // 0-11
+    const monthIndex = new Date(`${mes} 1, ${anio}`).getMonth();
     const diasEnMes = new Date(anio, monthIndex + 1, 0).getDate();
 
     const defaultFrom = new Date(anio, monthIndex, 1, 0, 0, 0).getTime();
@@ -1417,12 +1409,11 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
     const fromMs = fromParam ? parseInt(fromParam, 10) : defaultFrom;
     const toMs   = toParam   ? parseInt(toParam, 10)   : defaultTo;
 
-    // ---------- 3) LECTURA REDIS Y AGRUPACIÓN POR UNIDAD ----------
+    // ---------- 3) LECTURA REDIS Y AGRUPACIÓN ----------
     const raw = await redisClient.zRangeByScore('View_Datalog_Gen', fromMs, toMs);
     const registros = raw.map(r => { try { return JSON.parse(r); } catch { return null; } })
                          .filter(r => r && r.Expr1 && r.Expr1.includes('Entrega'));
 
-    // Unidades que pertenecen a la planta solicitada (p. ej. "BIJAGUA_U1", "BIJAGUA_U2")
     const unidadesSet = new Set(
       registros
         .filter(r => (r.Name || '').toUpperCase().includes(planta.toUpperCase()))
@@ -1431,7 +1422,6 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
     const unidades = Array.from(unidadesSet).sort();
 
     if (!unidades.length) {
-      // Si no hay unidades en Redis para esa planta/rango, devolvemos proyección y unidades vacías
       return res.json({
         planta,
         anio: Number(anio),
@@ -1444,8 +1434,7 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
       });
     }
 
-    // Agrupar energía entregada por (unidad -> día)
-    const entregadaPorUnidadDia = new Map(); // Map<unidad, Map<YYYY-MM-DD, number>>
+    const entregadaPorUnidadDia = new Map();
     for (const u of unidades) entregadaPorUnidadDia.set(u, new Map());
 
     for (const row of registros) {
@@ -1453,43 +1442,34 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
       if (!name || !(name.toUpperCase().includes(planta.toUpperCase()))) continue;
 
       const fecha = new Date(row.TimestampUTC);
-      const diaKey = fecha.toISOString().split('T')[0]; // YYYY-MM-DD
-      const v = Number(row.Values_KWH) || 0; // ya manejas este valor como MWh en tus endpoints
+      const diaKey = fecha.toISOString().split('T')[0];
+      const v = Number(row.Values_KWH) || 0;
 
       const mapaDia = entregadaPorUnidadDia.get(name);
       mapaDia.set(diaKey, (mapaDia.get(diaKey) || 0) + v);
     }
 
-    // ---------- 4) PROYECCIÓN DIARIA POR UNIDAD ----------
-    // - Si hay proyección por unidad en SQL: usamos esa.
-    // - Si solo hay proyección a nivel planta: repartimos equitativamente entre #unidades.
-    const proyPorUnidadMensual = new Map(); // Map<unidad, mensual MWh>
+    // ---------- 4) PROYECCIÓN POR UNIDAD ----------
+    const proyPorUnidadMensual = new Map();
 
     if (hayProyPorUnidad) {
-      // Llenamos por coincidencia exacta de nombre
       for (const u of unidades) {
         const filaU = proySQL.find(p => p.key.toUpperCase() === u.toUpperCase());
-        if (filaU) {
-          proyPorUnidadMensual.set(u, filaU.mensual_MWh);
-        }
-      }
-      // Si alguna unidad no tiene fila propia, asignamos 0 por defecto
-      for (const u of unidades) {
-        if (!proyPorUnidadMensual.has(u)) proyPorUnidadMensual.set(u, 0);
+        proyPorUnidadMensual.set(u, filaU ? filaU.mensual_MWh : 0);
       }
     } else {
-      // Reparto equitativo de la proyección mensual total entre las unidades detectadas
       const cuota = proyeccionMensualPlanta_MWh / unidades.length;
-      for (const u of unidades) proyPorUnidadMensual.set(u, cuota);
+      for (const u of unidades) {
+        proyPorUnidadMensual.set(u, cuota);
+      }
     }
 
-    // Proyección diaria por unidad
-    const proyPorUnidadDiaria = new Map(); // Map<unidad, diaria MWh>
+    const proyPorUnidadDiaria = new Map();
     for (const u of unidades) {
       proyPorUnidadDiaria.set(u, proyPorUnidadMensual.get(u) / diasEnMes);
     }
 
-    // ---------- 5) ARMAR RESPUESTA POR UNIDAD ----------
+    // ---------- 5) ARMAR RESPUESTA ----------
     const unidadesRespuesta = [];
     let totalEntregada_MWh = 0;
 
@@ -1522,7 +1502,6 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
       });
     }
 
-    // ---------- 6) RESPUESTA ----------
     res.json({
       planta,
       anio: Number(anio),
