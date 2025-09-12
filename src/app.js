@@ -1519,6 +1519,106 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
   }
 });
 
+app.get('/api/scada-service/proyecciones-diarias4', async (req, res) => {
+  try {
+    const { planta, anio, mes } = req.query;
+    const fromParam = (req.dates && req.dates.fromParam) || req.query.from;
+    const toParam   = (req.dates && req.dates.toParam)   || req.query.to;
+
+    if (!anio || !mes) {
+      return res.status(400).json({ error: 'Faltan parámetros: anio, mes' });
+    }
+
+    // --- Mes en UTC (soporta nombres en ES)
+    const MES_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+    const mi = MES_ES.indexOf(String(mes).toLowerCase());
+    const monthIndex = mi >= 0 ? mi : new Date(`${mes} 1, ${anio}`).getUTCMonth(); 
+    const diasEnMes = new Date(Date.UTC(anio, monthIndex + 1, 0)).getUTCDate();
+    const monthStartUTC = Date.UTC(anio, monthIndex, 1, 0, 0, 0);
+    const monthEndUTC   = Date.UTC(anio, monthIndex, diasEnMes, 23, 59, 59);
+
+    // rango solicitado (si no viene: TODO el mes)
+    let fromMs = fromParam ? Number(fromParam) : monthStartUTC;
+    let toMs   = toParam   ? Number(toParam)   : monthEndUTC;
+    const f = new Date(fromMs), t = new Date(toMs);
+    fromMs = Date.UTC(f.getUTCFullYear(), f.getUTCMonth(), f.getUTCDate(), 0, 0, 0);
+    toMs   = Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate(), 23, 59, 59);
+    const tieneRango = Boolean(fromParam && toParam);
+    const nowUTC = Date.now();
+
+    // --- 1) Proyección mensual de planta(s)
+    const pool = await getPool();
+
+    let proyPlanta_MWh = 0;
+    let plantasAProcesar = [];
+
+    if (planta) {
+      // ✅ Caso normal: una planta
+      const proj = await pool.request()
+        .input('anio', sql.Int, parseInt(anio, 10))
+        .input('mes', sql.VarChar, mes)
+        .input('planta', sql.VarChar, planta)
+        .query(`
+          SELECT TOP 1 proyeccion
+          FROM proyecciones
+          WHERE AnioRegistro = @anio AND mes = @mes AND planta = @planta
+        `);
+
+      if (!proj.recordset.length) {
+        return res.status(404).json({ error: 'No se encontró proyección para esos parámetros' });
+      }
+
+      proyPlanta_MWh = Number(proj.recordset[0].proyeccion) / 1000;
+      plantasAProcesar = [planta];
+    } else {
+      // 🚀 Nuevo: todas las plantas del mes/año
+      const projAll = await pool.request()
+        .input('anio', sql.Int, parseInt(anio, 10))
+        .input('mes', sql.VarChar, mes)
+        .query(`
+          SELECT planta, proyeccion
+          FROM proyecciones
+          WHERE AnioRegistro = @anio AND mes = @mes
+        `);
+
+      if (!projAll.recordset.length) {
+        return res.status(404).json({ error: 'No se encontraron proyecciones para ese mes/año' });
+      }
+
+      proyPlanta_MWh = projAll.recordset.reduce((acc, r) => acc + (Number(r.proyeccion) / 1000), 0);
+      plantasAProcesar = projAll.recordset.map(r => r.planta);
+    }
+
+    // --- 2) Detectar unidades reales en Redis
+    const monthRaw = await redisClient.zRangeByScore('View_Datalog_Gen', monthStartUTC, monthEndUTC);
+    const monthRegs = monthRaw.map(r => { try { return JSON.parse(r); } catch { return null; } })
+                              .filter(r => r && plantasAProcesar.some(p => (r.Name || '').toUpperCase().includes(p.toUpperCase())));
+    const unidades = Array.from(new Set(monthRegs.map(r => r.Name))).sort();
+
+    if (!unidades.length) {
+      return res.json({ meta: { planta: planta || 'TODAS', anio: Number(anio), mes, dias: diasEnMes, periodo: { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() }, proyeccionMensualPlanta_MWh: proyPlanta_MWh, proyeccionDiariaPlanta_MWh: Number((proyPlanta_MWh/diasEnMes).toFixed(2)) }, summary: [], rows: [] });
+    }
+
+    // --- 3) Reparto por unidad y día
+    const proyUnidad_MWh  = proyPlanta_MWh / unidades.length;
+    const proyUnidadDia   = proyUnidad_MWh / diasEnMes;
+    const proyPlantaDia   = proyPlanta_MWh / diasEnMes;
+
+    // --- 4) Leer energía entregada en el rango
+    const rangeRaw = await redisClient.zRangeByScore('View_Datalog_Gen', fromMs, toMs);
+    const regsEnt = rangeRaw.map(r => { try { return JSON.parse(r); } catch { return null; } })
+                            .filter(r => r && r.Expr1 && r.Expr1.includes('Entrega') &&
+                                   plantasAProcesar.some(p => (r.Name || '').toUpperCase().includes(p.toUpperCase())));
+
+    // --- resto del código queda igual (agrupación y construcción de summary/rows)...
+    // ...
+    
+  } catch (err) {
+    console.error('❌ Error en /api/scada-service/proyecciones-diarias2:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 
 
 // --- Inicio del servidor después de conectar Redis ---
