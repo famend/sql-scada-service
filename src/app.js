@@ -1519,7 +1519,8 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
   }
 });
 
-app.get('/api/scada-service/proyecciones-diarias4', async (req, res) => {
+// GET /api/scada-service/proyecciones-diarias2?anio=2025&mes=Septiembre[&planta=BIJAGUA][&from=...&to=...]
+app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
   try {
     const { planta, anio, mes } = req.query;
     const fromParam = (req.dates && req.dates.fromParam) || req.query.from;
@@ -1530,7 +1531,10 @@ app.get('/api/scada-service/proyecciones-diarias4', async (req, res) => {
     }
 
     // --- Mes en UTC (soporta nombres en ES)
-    const MES_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+    const MES_ES = [
+      'enero','febrero','marzo','abril','mayo','junio',
+      'julio','agosto','septiembre','octubre','noviembre','diciembre'
+    ];
     const mi = MES_ES.indexOf(String(mes).toLowerCase());
     const monthIndex = mi >= 0 ? mi : new Date(`${mes} 1, ${anio}`).getUTCMonth(); 
     const diasEnMes = new Date(Date.UTC(anio, monthIndex + 1, 0)).getUTCDate();
@@ -1553,7 +1557,7 @@ app.get('/api/scada-service/proyecciones-diarias4', async (req, res) => {
     let plantasAProcesar = [];
 
     if (planta) {
-      // ✅ Caso normal: una planta
+      // ✅ Caso normal: una sola planta
       const proj = await pool.request()
         .input('anio', sql.Int, parseInt(anio, 10))
         .input('mes', sql.VarChar, mes)
@@ -1596,7 +1600,19 @@ app.get('/api/scada-service/proyecciones-diarias4', async (req, res) => {
     const unidades = Array.from(new Set(monthRegs.map(r => r.Name))).sort();
 
     if (!unidades.length) {
-      return res.json({ meta: { planta: planta || 'TODAS', anio: Number(anio), mes, dias: diasEnMes, periodo: { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() }, proyeccionMensualPlanta_MWh: proyPlanta_MWh, proyeccionDiariaPlanta_MWh: Number((proyPlanta_MWh/diasEnMes).toFixed(2)) }, summary: [], rows: [] });
+      return res.json({
+        meta: {
+          planta: planta || 'TODAS',
+          anio: Number(anio),
+          mes,
+          dias: diasEnMes,
+          periodo: { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() },
+          proyeccionMensualPlanta_MWh: proyPlanta_MWh,
+          proyeccionDiariaPlanta_MWh: Number((proyPlanta_MWh/diasEnMes).toFixed(2))
+        },
+        summary: [],
+        rows: []
+      });
     }
 
     // --- 3) Reparto por unidad y día
@@ -1610,14 +1626,95 @@ app.get('/api/scada-service/proyecciones-diarias4', async (req, res) => {
                             .filter(r => r && r.Expr1 && r.Expr1.includes('Entrega') &&
                                    plantasAProcesar.some(p => (r.Name || '').toUpperCase().includes(p.toUpperCase())));
 
-    // --- resto del código queda igual (agrupación y construcción de summary/rows)...
-    // ...
-    
+    // Agrupar por unidad/día
+    const entregadaPorUnidadDia = new Map(); // Map<unidad, Map<YYYY-MM-DD, MWh>>
+    for (const u of unidades) entregadaPorUnidadDia.set(u, new Map());
+    for (const row of regsEnt) {
+      const u = row.Name;
+      const fechaKey = new Date(row.TimestampUTC).toISOString().split('T')[0];
+      const v = Number(row.Values_KWH) || 0;
+      const mapa = entregadaPorUnidadDia.get(u);
+      mapa.set(fechaKey, (mapa.get(fechaKey) || 0) + v);
+    }
+
+    // --- 5) Construir salida
+    const rows = [];
+    const summary = [];
+    let totalPlantaEntregada = 0;
+
+    for (const u of unidades) {
+      const mapa = entregadaPorUnidadDia.get(u) || new Map();
+
+      // total de la unidad
+      let totalUnidad = 0;
+      for (let d = 1; d <= diasEnMes; d++) {
+        const dayUTC = Date.UTC(anio, monthIndex, d, 0, 0, 0);
+        const enRango = tieneRango ? (dayUTC >= fromMs && dayUTC <= toMs) : (dayUTC <= nowUTC);
+        if (!enRango) continue;
+        const fechaKey = new Date(dayUTC).toISOString().split('T')[0];
+        const v = mapa.get(fechaKey);
+        if (v != null) totalUnidad += v;
+      }
+      totalUnidad = Number(totalUnidad.toFixed(2));
+      totalPlantaEntregada += totalUnidad;
+
+      // filas por día
+      for (let d = 1; d <= diasEnMes; d++) {
+        const dayUTC = Date.UTC(anio, monthIndex, d, 0, 0, 0);
+        if (tieneRango && (dayUTC < fromMs || dayUTC > toMs)) continue;
+
+        const fechaKey = new Date(dayUTC).toISOString().split('T')[0];
+        let entregada = mapa.get(fechaKey);
+
+        if (!tieneRango) {
+          if (dayUTC > nowUTC) {
+            entregada = null;
+          } else if (entregada == null) {
+            entregada = 0;
+          }
+        } else {
+          entregada = (entregada == null) ? null : entregada;
+        }
+
+        rows.push({
+          planta: planta || 'TODAS',
+          unidad: u,
+          fecha: fechaKey,
+          energiaProyectada_MWh: Number(proyUnidadDia.toFixed(2)),
+          energiaEntregada_MWh: (entregada == null) ? null : Number(entregada.toFixed(2)),
+          proyeccionMensual_MWh: Number(proyUnidad_MWh.toFixed(2)),
+          proyeccionDiaria_MWh: Number(proyUnidadDia.toFixed(2)),
+          totalEntregada_MWh: totalUnidad
+        });
+      }
+
+      summary.push({
+        unidad: u,
+        proyeccionMensual_MWh: Number(proyUnidad_MWh.toFixed(2)),
+        proyeccionDiaria_MWh: Number(proyUnidadDia.toFixed(2)),
+        totalEntregada_MWh: totalUnidad
+      });
+    }
+
+    const meta = {
+      planta: planta || 'TODAS',
+      anio: Number(anio),
+      mes,
+      dias: diasEnMes,
+      periodo: { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() },
+      proyeccionMensualPlanta_MWh: Number(proyPlanta_MWh.toFixed(2)),
+      proyeccionDiariaPlanta_MWh: Number(proyPlantaDia.toFixed(2)),
+      unidades
+    };
+
+    res.json({ meta, summary, rows });
+
   } catch (err) {
     console.error('❌ Error en /api/scada-service/proyecciones-diarias2:', err);
     res.status(500).json({ error: 'Error interno' });
   }
 });
+
 
 
 
