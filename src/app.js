@@ -1520,7 +1520,7 @@ app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
 });
 
 // GET /api/scada-service/proyecciones-diarias2?anio=2025&mes=Septiembre[&planta=BIJAGUA][&from=...&to=...]
-app.get('/api/scada-service/proyecciones-diarias2', async (req, res) => {
+app.get('/api/scada-service/proyecciones-diarias4', async (req, res) => {
   try {
     const { planta, anio, mes } = req.query;
     const fromParam = (req.dates && req.dates.fromParam) || req.query.from;
