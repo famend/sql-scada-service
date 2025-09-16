@@ -725,6 +725,9 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
     // 2. Definir estructura para agrupar y acumular
     const agrupados = new Map();
 
+    // Crear un Set para llevar control de qué plantas ya sumaron capacidad
+    const plantasConCapacidad = new Set();
+
     // 3. Procesar registros y acumular valores
     for (const row of registros) {
       const key = groupBy ? row[groupBy] : 'totalPlantas';
@@ -733,7 +736,7 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
         agrupados.set(key, {
           totalEnergiaEntregada: 0,
           totalEnergiaRecibida: 0,
-          capacidadMW: 0,   // capacidad de la planta, no acumulada
+          capacidadMW: 0,   // capacidad acumulada
           count: 0
         });
       }
@@ -741,15 +744,23 @@ app.get('/api/plantas/suma-15min3', async (req, res) => {
       const grupo = agrupados.get(key);
       const valor = parseFloat(row.Values_KWH) || 0;
       const capacidadMaximaMW = parseFloat(row.Maximo_Cogeneracion_MW) || 0;
+      const plantaName = row.Name; // aquí asumo que tienes un campo Name en la fila
 
       if (row.Expr1.includes('Entrega')) {
         grupo.totalEnergiaEntregada += valor;
-        grupo.capacidadMW = Math.max(grupo.capacidadMW, capacidadMaximaMW); // usar el mayor valor
         grupo.count++;
+
+        // Sumar la capacidad solo si no se ha sumado antes para este Name
+        const keyUnico = `${key}-${plantaName}`;
+        if (!plantasConCapacidad.has(keyUnico)) {
+          grupo.capacidadMW += capacidadMaximaMW;
+          plantasConCapacidad.add(keyUnico);
+        }
       } else if (row.Expr1.includes('Recibida')) {
         grupo.totalEnergiaRecibida += valor;
       }
     }
+
 
     // 4. Calcular valores finales y preparar salida
     const resultado = [];
